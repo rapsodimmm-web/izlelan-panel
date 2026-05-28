@@ -1,6 +1,5 @@
 // api/xtream/[...path].js — Vercel Catch-all Proxy
-// /api/xtream/player_api.php?... → http://91.229.239.102/player_api.php?...
-// /api/xtream/movie/user/pass/id.mkv → http://91.229.239.102/movie/user/pass/id.mkv
+// Tüm /api/xtream/* isteklerini XtreamCodes sunucusuna yönlendirir
 
 const XTREAM_BASE = 'http://91.229.239.102';
 
@@ -11,17 +10,15 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // path array'i birleştir: ['player_api.php'] → 'player_api.php'
-  const pathParts = req.query.path || [];
-  const subPath = Array.isArray(pathParts) ? pathParts.join('/') : String(pathParts);
+  // req.url = '/api/xtream/player_api.php?username=x&password=y&action=z'
+  // Hedef: 'http://91.229.239.102/player_api.php?username=x&password=y&action=z'
+  const originalUrl = req.url || '';
+  
+  // /api/xtream/ prefix'ini kaldır
+  const withoutPrefix = originalUrl.replace(/^\/api\/xtream\/?/, '');
+  const targetUrl = `${XTREAM_BASE}/${withoutPrefix}`;
 
-  // Diğer query param'larını koru (path dışındakiler)
-  const { path: _p, ...restQuery } = req.query;
-  const qs = new URLSearchParams(restQuery).toString();
-
-  // Çift slash'ı önle
-  const targetUrl = `${XTREAM_BASE}/${subPath}${qs ? '?' + qs : ''}`;
-  console.log(`[PROXY] → ${targetUrl}`);
+  console.log(`[PROXY] ${req.method} ${originalUrl} → ${targetUrl}`);
 
   try {
     const upstream = await fetch(targetUrl, {
