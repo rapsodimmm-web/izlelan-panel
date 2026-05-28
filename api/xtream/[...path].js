@@ -1,6 +1,6 @@
-// api/xtream/[...path].js — Vercel Serverless Function (Catch-all route)
-// /api/xtream/player_api.php?... → panelim.veryplayer.site/HxZSfuzV/player_api.php?...
-// /api/xtream/movie/user/pass/id.mkv → panelim.veryplayer.site/HxZSfuzV/movie/...
+// api/xtream/[...path].js — Vercel Catch-all Proxy
+// /api/xtream/player_api.php?... → http://91.229.239.102/player_api.php?...
+// /api/xtream/movie/user/pass/id.mkv → http://91.229.239.102/movie/user/pass/id.mkv
 
 const XTREAM_BASE = 'http://91.229.239.102';
 
@@ -11,14 +11,15 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // req.query.path = ['player_api.php'] or ['movie', 'user', 'pass', '123.mkv']
+  // path array'i birleştir: ['player_api.php'] → 'player_api.php'
   const pathParts = req.query.path || [];
-  const subPath = Array.isArray(pathParts) ? pathParts.join('/') : pathParts;
+  const subPath = Array.isArray(pathParts) ? pathParts.join('/') : String(pathParts);
 
-  // Query string'i yeniden oluştur (path dışındakiler)
+  // Diğer query param'larını koru (path dışındakiler)
   const { path: _p, ...restQuery } = req.query;
   const qs = new URLSearchParams(restQuery).toString();
 
+  // Çift slash'ı önle
   const targetUrl = `${XTREAM_BASE}/${subPath}${qs ? '?' + qs : ''}`;
   console.log(`[PROXY] → ${targetUrl}`);
 
@@ -26,7 +27,7 @@ export default async function handler(req, res) {
     const upstream = await fetch(targetUrl, {
       method: req.method,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; IzlelanProxy/2.0)',
+        'User-Agent': 'Mozilla/5.0 (compatible; IzlelanProxy/3.0)',
         'Accept': 'application/json, */*',
       },
     });
@@ -38,7 +39,7 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 'no-store');
     return res.status(upstream.status).send(body);
   } catch (err) {
-    console.error('[PROXY ERR]', err.message);
+    console.error('[PROXY ERR]', err.message, '→', targetUrl);
     return res.status(502).json({ error: err.message, target: targetUrl });
   }
 }
