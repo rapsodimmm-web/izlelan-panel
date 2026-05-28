@@ -11,16 +11,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { Play, Search, X, Star, ChevronLeft, ChevronRight, Tv, Film } from 'lucide-react';
 
-// XtreamCodes sunucu adresi (stream URL'leri için)
-const XTREAM_BASE = 'http://91.229.239.102';
+// XtreamCodes sunucu (stream URL’leri için doğrudan)
+const XTREAM_BASE = 'https://panelim.veryplayer.site';
 
 /**
- * XtreamCodes API'ye Vercel proxy üzerinden istek at
- * /api/xtream/player_api.php → panelim.veryplayer.site/HxZSfuzV/player_api.php
+ * XtreamCodes API’ye Vercel proxy üzerinden istek at
+ * /api/xtream?username=X&password=Y&action=Z
  */
 async function xtreamApi(username, password, action, extra = {}) {
   const params = new URLSearchParams({ username, password, action, ...extra });
-  const url = `/api/xtream/player_api.php?${params}`;
+  const url = `/api/xtream?${params}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`API hatası: ${res.status}`);
   return res.json();

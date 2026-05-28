@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { XTREAM_SERVER } from './PanelLogin';
+import { XTREAM_SERVER, XTREAM_HOST, XTREAM_PORT } from './PanelLogin';
 import XtreamVOD from '../components/XtreamVOD';
 import {
   LogOut, Copy, Check, Tv, Wifi, Calendar, Users,
@@ -130,12 +130,13 @@ export default function PanelDashboard() {
   const isExpired = expTimestamp ? expTimestamp < now : false;
   const isExpiringSoon = daysLeft !== null && daysLeft <= 7 && !isExpired;
 
-  // M3U URL
+  // M3U URL — XUI.one format
   const m3uUrl = `${XTREAM_SERVER}/get.php?username=${username}&password=${password}&type=m3u_plus&output=ts`;
   const m3uUrlSimple = `${XTREAM_SERVER}/get.php?username=${username}&password=${password}&type=m3u_plus`;
 
-  // Xtream Codes info
-  const port = server_info?.port || '80';
+  // Xtream Codes bilgileri
+  const port = XTREAM_PORT || server_info?.port || '80';
+  const host = XTREAM_HOST || '91.229.239.102';
 
   const TABS = [
     { id: 'overview', label: '📊 Özet' },
@@ -493,10 +494,20 @@ export default function PanelDashboard() {
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: 16 }}>
                 TiviMate, IPTV Smarters gibi uygulamalar için "Xtream Codes" seçeneğiyle giriş yapın.
               </p>
-              <InfoRow label="Sunucu URL" value={XTREAM_SERVER} copyable />
+              <InfoRow label="Sunucu" value={host} copyable />
               <InfoRow label="Port" value={port} copyable />
               <InfoRow label="Kullanıcı Adı" value={username} copyable />
               <InfoRow label="Şifre" value={password} copyable />
+              <div style={{
+                marginTop: 12,
+                background: 'rgba(0,254,218,0.05)',
+                border: '1px solid rgba(0,254,218,0.15)',
+                borderRadius: 10, padding: '12px 16px',
+                fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.7,
+              }}>
+                💡 <strong style={{ color: 'var(--text-primary)' }}>IPTV Smarters / TiviMate</strong> uygulamasında
+                "Xtream Codes" seçeneğiyle bu bilgileri girin.
+              </div>
             </div>
           </div>
         )}
@@ -564,7 +575,8 @@ export default function PanelDashboard() {
                   '"Xtream Codes API" seçeneğini tıklayın',
                   `Kullanıcı adı: ${username}`,
                   `Şifre: ${password}`,
-                  `Sunucu URL: ${XTREAM_SERVER}`,
+                  `Sunucu: ${host}`,
+                  `Port: ${port}`,
                   '"Ekle" butonuna basın ve kanalları bekleyin',
                 ],
               },

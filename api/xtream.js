@@ -1,38 +1,30 @@
-// api/xtream.js — Vercel Serverless Function
-// Tüm /api/xtream/* isteklerini panelim.veryplayer.site/HxZSfuzV/*'a proxy'ler
-// CORS sorununu bu şekilde çözüyoruz
+// api/xtream.js — Vercel Serverless Proxy
+// XtreamCodes API'ye CORS sorunsuz erişim sağlar
+// Kullanım: /api/xtream?username=X&password=Y&action=Z&...
 
-const XTREAM_BASE = 'http://panelim.veryplayer.site/HxZSfuzV';
+const XTREAM_API = 'https://panelim.veryplayer.site/player_api.php';
 
 export default async function handler(req, res) {
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // /api/xtream/player_api.php?... → /HxZSfuzV/player_api.php?...
-  // /api/xtream/movie/user/pass/123.mkv → /HxZSfuzV/movie/user/pass/123.mkv
-  const fullUrl = req.url; // e.g. /api/xtream/player_api.php?username=x&password=y
-  
-  // Strip /api/xtream prefix — everything after becomes the path
-  const pathAfterProxy = fullUrl.replace(/^\/api\/xtream/, '') || '/player_api.php';
-  const targetUrl = `${XTREAM_BASE}${pathAfterProxy}`;
+  // req.query içindeki tüm parametreleri XtreamCodes API'ye ilet
+  const params = new URLSearchParams(req.query).toString();
+  const targetUrl = `${XTREAM_API}?${params}`;
 
-  console.log(`[PROXY] ${req.method} ${targetUrl}`);
+  console.log(`[XTREAM PROXY] → ${targetUrl}`);
 
   try {
     const upstream = await fetch(targetUrl, {
-      method: req.method,
+      method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; IzlelanProxy/2.0)',
+        'User-Agent': 'Mozilla/5.0 (compatible; IzlelanProxy/4.0)',
         'Accept': 'application/json, */*',
       },
-      // Forward body for POST requests
-      ...(req.method === 'POST' ? { body: JSON.stringify(req.body) } : {}),
+      signal: AbortSignal.timeout(15000),
     });
 
     const contentType = upstream.headers.get('content-type') || 'application/json';
@@ -42,11 +34,7 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 'no-store');
     return res.status(upstream.status).send(body);
   } catch (err) {
-    console.error('[PROXY ERROR]', err.message, '→', targetUrl);
-    return res.status(502).json({
-      error: 'Proxy bağlantı hatası',
-      message: err.message,
-      target: targetUrl,
-    });
+    console.error('[XTREAM PROXY ERR]', err.message);
+    return res.status(502).json({ error: err.message, target: targetUrl });
   }
 }
