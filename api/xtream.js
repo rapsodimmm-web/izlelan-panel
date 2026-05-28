@@ -1,7 +1,6 @@
 // api/xtream.js — Vercel Serverless Function
-// XtreamCodes sunucusuna proxy olarak hizmet verir
-// CORS sorununu bu şekilde çözüyoruz:
-// Tarayıcı → /api/xtream/* → Bu fonksiyon → panelim.veryplayer.site/HxZSfuzV/*
+// Tüm /api/xtream/* isteklerini panelim.veryplayer.site/HxZSfuzV/*'a proxy'ler
+// CORS sorununu bu şekilde çözüyoruz
 
 const XTREAM_BASE = 'http://panelim.veryplayer.site/HxZSfuzV';
 
@@ -9,36 +8,42 @@ export default async function handler(req, res) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
-  // Build the target URL
-  // /api/xtream/player_api.php?username=X&password=Y
-  // → http://panelim.veryplayer.site/HxZSfuzV/player_api.php?username=X&password=Y
-  const { url } = req;
-  const path = url.replace(/^\/api\/xtream/, '');
-  const targetUrl = `${XTREAM_BASE}${path}`;
+  // /api/xtream/player_api.php?... → /HxZSfuzV/player_api.php?...
+  // /api/xtream/movie/user/pass/123.mkv → /HxZSfuzV/movie/user/pass/123.mkv
+  const fullUrl = req.url; // e.g. /api/xtream/player_api.php?username=x&password=y
+  
+  // Strip /api/xtream prefix — everything after becomes the path
+  const pathAfterProxy = fullUrl.replace(/^\/api\/xtream/, '') || '/player_api.php';
+  const targetUrl = `${XTREAM_BASE}${pathAfterProxy}`;
+
+  console.log(`[PROXY] ${req.method} ${targetUrl}`);
 
   try {
     const upstream = await fetch(targetUrl, {
       method: req.method,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; IzlelanProxy/1.0)',
+        'User-Agent': 'Mozilla/5.0 (compatible; IzlelanProxy/2.0)',
         'Accept': 'application/json, */*',
       },
+      // Forward body for POST requests
+      ...(req.method === 'POST' ? { body: JSON.stringify(req.body) } : {}),
     });
 
     const contentType = upstream.headers.get('content-type') || 'application/json';
     const body = await upstream.text();
 
     res.setHeader('Content-Type', contentType);
-    res.status(upstream.status).send(body);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(upstream.status).send(body);
   } catch (err) {
-    console.error('Proxy error:', err);
-    res.status(502).json({
+    console.error('[PROXY ERROR]', err.message, '→', targetUrl);
+    return res.status(502).json({
       error: 'Proxy bağlantı hatası',
       message: err.message,
       target: targetUrl,
