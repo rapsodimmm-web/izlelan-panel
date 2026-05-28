@@ -2,7 +2,7 @@
 // /api/xtream/player_api.php?... → panelim.veryplayer.site/HxZSfuzV/player_api.php?...
 // /api/xtream/movie/user/pass/id.mkv → panelim.veryplayer.site/HxZSfuzV/movie/...
 
-const XTREAM_BASE = 'http://panelim.veryplayer.site/HxZSfuzV';
+const XTREAM_BASE = 'http://91.229.239.102';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');

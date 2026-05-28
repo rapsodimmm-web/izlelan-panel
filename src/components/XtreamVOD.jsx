@@ -12,7 +12,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Play, Search, X, Star, ChevronLeft, ChevronRight, Tv, Film } from 'lucide-react';
 
 // XtreamCodes sunucu adresi (stream URL'leri için)
-const XTREAM_BASE = 'http://panelim.veryplayer.site';
+const XTREAM_BASE = 'http://91.229.239.102';
 
 /**
  * XtreamCodes API'ye Vercel proxy üzerinden istek at
