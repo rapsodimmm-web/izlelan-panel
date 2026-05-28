@@ -11,32 +11,18 @@
 import { useState, useEffect, useRef } from 'react';
 import { Play, Search, X, Star, ChevronLeft, ChevronRight, Tv, Film } from 'lucide-react';
 
-// XtreamCodes sunucu adresi
+// XtreamCodes sunucu adresi (stream URL'leri için)
 const XTREAM_BASE = 'http://panelim.veryplayer.site';
 
-// Proxy endpoint — CORS sorununu aşmak için Railway proxy'i kullanır
-const PROXY_BASE = 'https://izlelan-stream-proxy-production.up.railway.app';
-
 /**
- * XtreamCodes API'ye proxy üzerinden istek at
+ * XtreamCodes API'ye Vercel proxy üzerinden istek at
+ * /api/xtream/player_api.php → panelim.veryplayer.site/HxZSfuzV/player_api.php
  */
 async function xtreamApi(username, password, action, extra = {}) {
-  // Doğrudan istek dene
-  try {
-    const params = new URLSearchParams({
-      username, password, action, ...extra,
-    });
-    const url = `${XTREAM_BASE}/HxZSfuzV/player_api.php?${params}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    if (res.ok) return res.json();
-  } catch { /* CORS hatası — proxy dene */ }
-
-  // Proxy üzerinden
   const params = new URLSearchParams({ username, password, action, ...extra });
-  const res = await fetch(
-    `${PROXY_BASE}/xtream?${params}`,
-    { signal: AbortSignal.timeout(10000) }
-  );
+  const url = `/api/xtream/player_api.php?${params}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`API hatası: ${res.status}`);
   return res.json();
 }
 
