@@ -7,7 +7,7 @@
  *  → İçerik panelden çıkmadan izlenir
  */
 import { useState, useEffect, useRef } from 'react';
-import { Play, Search, X, Star, ChevronLeft, ChevronRight, Tv, Film, ExternalLink } from 'lucide-react';
+import { Play, Pause, Search, X, Star, ChevronLeft, ChevronRight, Tv, Film, ExternalLink, Volume2, VolumeX, Maximize2, Minimize2, ArrowLeft, Download, AlertTriangle } from 'lucide-react';
 
 const XTREAM_BASE = 'https://panelim.veryplayer.site';
 const PANEL_KEY   = 'HxZSfuzV';
@@ -20,156 +20,781 @@ async function xtreamApi(username, password, action, extra = {}) {
   return res.json();
 }
 
-// ─── HOT PLAYER MODAL ────────────────────────────────────────────────────────
-// Hot Player'ı izlelan paneli içinde embed eden tam ekran modal
+// ─── PREMIUM YEREL OYNATICI VE DETAY PANELİ ──────────────────────────────────
+// Hot Player iframe'i yerine doğrudan HLS/MP4 akışlarını oynatan yerel player ve dizi detay paneli
 
 function HotPlayerModal({ stream, username, password, onClose }) {
-  const iframeRef = useRef(null);
-  const [loaded, setLoaded] = useState(false);
+  const isMovie = !!stream.stream_id;
+  
+  // State tanımları
+  const [loading, setLoading] = useState(!isMovie);
+  const [error, setError] = useState(null);
+  const [seriesInfo, setSeriesInfo] = useState(null);
+  const [selectedSeason, setSelectedSeason] = useState('1');
+  const [activeStreamUrl, setActiveStreamUrl] = useState(
+    isMovie
+      ? `${XTREAM_BASE}/movie/${username}/${password}/${stream.stream_id}.${stream.container_extension || 'mp4'}`
+      : null
+  );
+  const [activeTitle, setActiveTitle] = useState(isMovie ? stream.name : null);
+  
+  // Custom Video Player State ve Ref'leri
+  const videoRef = useRef(null);
+  const containerRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(0.8);
+  const [isMuted, setIsMuted] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const [videoError, setVideoError] = useState(false);
+  const controlsTimeoutRef = useRef(null);
 
-  // Hot Player login form'u otomatik gönder
-  // XUI.one Hot Player: POST ile username/password gönderilirse oturum açılır
-  const hotPlayerBase = `${XTREAM_BASE}/${PANEL_KEY}/`;
-
-  // İframe yüklendikten sonra login formunu doldurup gönder
-  const handleIframeLoad = () => {
-    setLoaded(true);
-    // Iframe içine login bilgilerini göndermek için postMessage dene
-    try {
-      iframeRef.current?.contentWindow?.postMessage({
-        type: 'login', username, password
-      }, XTREAM_BASE);
-    } catch { /* cross-origin, normal */ }
+  // Kumandaların otomatik gizlenmesi
+  const handleMouseMove = () => {
+    setShowControls(true);
+    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    controlsTimeoutRef.current = setTimeout(() => {
+      if (isPlaying) setShowControls(false);
+    }, 3000);
   };
 
-  // Stream doğrudan URL (bazı tarayıcılarda video olarak açılabilir)
-  const directStreamUrl = `http://91.229.239.102/movie/${username}/${password}/${stream.stream_id || stream.series_id}.mp4`;
+  useEffect(() => {
+    if (!isMovie) {
+      setLoading(true);
+      setError(null);
+      xtreamApi(username, password, 'get_series_info', { series_id: stream.series_id })
+        .then(res => {
+          if (!res || (!res.episodes && !res.seasons)) {
+            throw new Error('Dizi bilgileri boş döndü');
+          }
+          setSeriesInfo(res);
+          // İlk sezonu bul
+          const sKeys = Object.keys(res.episodes || {});
+          if (sKeys.length > 0) {
+            setSelectedSeason(sKeys[0]);
+          } else if (res.seasons && res.seasons.length > 0) {
+            setSelectedSeason(res.seasons[0].season_number?.toString() || '1');
+          }
+          setLoading(false);
+        })
+        .catch(err => {
+          console.error("Dizi yükleme hatası:", err);
+          setError("Dizi detayları yüklenemedi. Lütfen tekrar deneyin.");
+          setLoading(false);
+        });
+    }
+
+    return () => {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    };
+  }, [stream]);
+
+  // Fullscreen değişikliğini algılama
+  useEffect(() => {
+    const handleFullscreen = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreen);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreen);
+  }, []);
+
+  // Zaman biçimlendirme
+  const formatTime = (seconds) => {
+    if (isNaN(seconds)) return '0:00';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    
+    const paddedS = s < 10 ? `0${s}` : s;
+    if (h > 0) {
+      const paddedM = m < 10 ? `0${m}` : m;
+      return `${h}:${paddedM}:${paddedS}`;
+    }
+    return `${m}:${paddedS}`;
+  };
+
+  // Video İşlemleri
+  const handlePlayPause = () => {
+    if (!videoRef.current) return;
+    if (isPlaying) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      videoRef.current.play()
+        .then(() => setIsPlaying(true))
+        .catch(err => console.warn("Player play error:", err));
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    if (videoRef.current) {
+      setCurrentTime(videoRef.current.currentTime);
+    }
+  };
+
+  const handleDurationChange = () => {
+    if (videoRef.current) {
+      setDuration(videoRef.current.duration);
+    }
+  };
+
+  const handleSeek = (e) => {
+    if (videoRef.current) {
+      const val = parseFloat(e.target.value);
+      videoRef.current.currentTime = val;
+      setCurrentTime(val);
+    }
+  };
+
+  const handleVolume = (e) => {
+    if (videoRef.current) {
+      const val = parseFloat(e.target.value);
+      videoRef.current.volume = val;
+      setVolume(val);
+      setIsMuted(val === 0);
+      videoRef.current.muted = vol === 0;
+    }
+  };
+
+  const handleMuteToggle = () => {
+    if (videoRef.current) {
+      const muted = !isMuted;
+      setIsMuted(muted);
+      videoRef.current.muted = muted;
+      if (!muted && volume === 0) {
+        setVolume(0.5);
+        videoRef.current.volume = 0.5;
+      }
+    }
+  };
+
+  const handleSpeed = (speed) => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = speed;
+      setPlaybackRate(speed);
+    }
+  };
+
+  const handleSkip = (sec) => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = Math.max(0, Math.min(videoRef.current.currentTime + sec, duration));
+    }
+  };
+
+  const handleFullscreenToggle = () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen()
+        .then(() => setIsFullscreen(true))
+        .catch(err => console.error("Fullscreen err:", err));
+    } else {
+      document.exitFullscreen()
+        .then(() => setIsFullscreen(false));
+    }
+  };
+
+  const handlePlayEpisode = (episode) => {
+    const url = `${XTREAM_BASE}/series/${username}/${password}/${episode.id}.${episode.container_extension || 'mp4'}`;
+    setActiveStreamUrl(url);
+    setActiveTitle(`${stream.name} - S${episode.season}E${episode.episode_num} - ${episode.title || 'Bölüm'}`);
+    setIsPlaying(false);
+    setVideoError(false);
+    setCurrentTime(0);
+    setDuration(0);
+  };
+
+  const closeVideo = () => {
+    setActiveStreamUrl(null);
+    setActiveTitle(null);
+    setIsPlaying(false);
+    setVideoError(false);
+  };
+
+  // Harici player ve indirme linkleri
+  const downloadUrl = activeStreamUrl;
+  const externalPlayerUrl = activeStreamUrl;
+
+  // MODAL ÜST PANELİ
+  const renderHeader = () => (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      padding: '12px 20px',
+      background: 'rgba(10, 10, 15, 0.95)',
+      borderBottom: '1px solid rgba(255,255,255,0.08)',
+      flexShrink: 0,
+      zIndex: 100,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button 
+          onClick={activeStreamUrl && !isMovie ? closeVideo : onClose}
+          style={{
+            background: 'none', border: 'none', color: 'rgba(255,255,255,0.7)',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 6, borderRadius: '50%', transition: 'all 0.2s',
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.08)'}
+          onMouseLeave={e => e.currentTarget.style.background = 'none'}
+        >
+          <ArrowLeft size={18} />
+        </button>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: '1rem', color: 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>{activeTitle || stream.name}</span>
+            {isMovie && (
+              <span style={{
+                background: 'rgba(0, 254, 218, 0.1)', border: '1px solid rgba(0,254,218,0.2)',
+                color: 'var(--primary)', padding: '1px 6px', borderRadius: 4, fontSize: '0.68rem', fontWeight: 700
+              }}>FİLM</span>
+            )}
+            {!isMovie && !activeStreamUrl && (
+              <span style={{
+                background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99,102,241,0.25)',
+                color: '#818cf8', padding: '1px 6px', borderRadius: 4, fontSize: '0.68rem', fontWeight: 700
+              }}>DİZİ</span>
+            )}
+          </div>
+          <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginTop: 2 }}>
+            izlelan · Premium Oynatıcı
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {activeStreamUrl && (
+          <>
+            {/* VLC'de Aç */}
+            <a
+              href={externalPlayerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '6px 12px', borderRadius: 8, textDecoration: 'none',
+                background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245,158,11,0.25)',
+                color: '#fbbf24', fontSize: '0.78rem', fontWeight: 700,
+                transition: 'all 0.2s',
+              }}
+              title="Cihazınızdaki VLC veya MX Player'da doğrudan oynatın"
+            >
+              <ExternalLink size={13} />
+              VLC'de Aç
+            </a>
+            {/* İndir */}
+            <a
+              href={downloadUrl}
+              download
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '6px 12px', borderRadius: 8, textDecoration: 'none',
+                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
+                color: 'rgba(255,255,255,0.8)', fontSize: '0.78rem', fontWeight: 600,
+              }}
+            >
+              <Download size={13} />
+              İndir
+            </a>
+          </>
+        )}
+        <button onClick={onClose} style={{
+          width: 32, height: 32, borderRadius: '50%',
+          background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
+          color: 'white', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s'
+        }}
+        onMouseEnter={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
+        onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
+        >
+          <X size={16} />
+        </button>
+      </div>
+    </div>
+  );
+
+  // Yükleme Durumu
+  if (loading) {
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        background: 'rgba(10,10,15,0.98)',
+        display: 'flex', flexDirection: 'column',
+      }}>
+        {renderHeader()}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.5)' }}>
+          <div style={{
+            width: 44, height: 44, borderRadius: '50%',
+            border: '3px solid rgba(0,254,218,0.15)',
+            borderTopColor: 'var(--primary)',
+            animation: 'spin 0.7s linear infinite',
+            marginBottom: 16,
+          }} />
+          <p style={{ fontWeight: 600, fontSize: '0.95rem' }}>Dizi ve Bölüm Bilgileri Alınıyor...</p>
+          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        </div>
+      </div>
+    );
+  }
+
+  // Hata Durumu
+  if (error) {
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        background: 'rgba(10,10,15,0.98)',
+        display: 'flex', flexDirection: 'column',
+      }}>
+        {renderHeader()}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
+          <AlertTriangle size={48} color="#ef4444" style={{ marginBottom: 16 }} />
+          <h3 style={{ color: 'white', fontWeight: 700, fontSize: '1.1rem', marginBottom: 8 }}>Detaylar Yüklenemedi</h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: 400, marginBottom: 20 }}>{error}</p>
+          <button 
+            onClick={onClose}
+            style={{
+              padding: '10px 24px', borderRadius: 10, cursor: 'pointer', fontWeight: 700,
+              background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)',
+              color: 'white', fontFamily: 'inherit', fontSize: '0.9rem',
+            }}
+          >Kapat</button>
+        </div>
+      </div>
+    );
+  }
+
+  // Dizi Detay Listeleme
+  const renderSeriesDetail = () => {
+    if (!seriesInfo) return null;
+    const { info, episodes = {} } = seriesInfo;
+    
+    // Sezon listesini al, yoksa key'lerden eşleştir
+    const seasonsList = seriesInfo.seasons && seriesInfo.seasons.length > 0
+      ? seriesInfo.seasons
+      : Object.keys(episodes).map(sNum => ({
+          season_number: sNum,
+          name: `Sezon ${sNum}`
+        }));
+
+    // Seçili sezon bölümleri
+    const activeSeasonEpisodes = episodes[selectedSeason.toString()] || episodes[Number(selectedSeason)] || [];
+
+    // Poster
+    const poster = info?.cover || stream.cover || stream.stream_icon;
+
+    return (
+      <div style={{
+        flex: 1, overflowY: 'auto', background: 'linear-gradient(180deg, #0f0f16 0%, #0a0a0f 100%)',
+        display: 'flex', flexDirection: 'column', padding: '32px 24px',
+      }}>
+        <div style={{
+          maxWidth: 1100, margin: '0 auto', width: '100%',
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 32,
+        }}>
+          {/* Sol Kolon - Bilgi Kartı */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            {poster && (
+              <img 
+                src={poster} 
+                alt={stream.name} 
+                style={{
+                  width: '100%', borderRadius: 16, border: '1px solid var(--border)',
+                  boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+                  objectFit: 'cover', aspectRatio: '2/3'
+                }}
+                onError={e => e.target.style.display = 'none'}
+              />
+            )}
+            <div style={{
+              background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
+              borderRadius: 16, padding: 20,
+            }}>
+              <h4 style={{ fontWeight: 700, color: 'white', marginBottom: 12, fontSize: '0.95rem' }}>Dizi Künyesi</h4>
+              {info?.plot && (
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', lineHeight: 1.5, marginBottom: 14 }}>
+                  {info.plot}
+                </p>
+              )}
+              {info?.rating && info.rating > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', color: '#fbbf24', marginBottom: 8 }}>
+                  <Star size={14} fill="#fbbf24" stroke="none" />
+                  <strong>IMDb: {parseFloat(info.rating).toFixed(1)}</strong>
+                </div>
+              )}
+              {info?.releaseDate && (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 6 }}>
+                  📅 Yayın Yılı: <span style={{ color: 'var(--text-secondary)' }}>{info.releaseDate}</span>
+                </div>
+              )}
+              {info?.genre && (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 6 }}>
+                  🎭 Tür: <span style={{ color: 'var(--text-secondary)' }}>{info.genre}</span>
+                </div>
+              )}
+              {info?.cast && (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  👥 Oyuncular: <span style={{ color: 'var(--text-secondary)', display: 'block', marginTop: 4, lineHeight: 1.4 }}>{info.cast}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Sağ Kolon - Sezonlar & Bölümler */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24, gridColumn: 'span 2' }}>
+            {/* Sezon Sekmeleri */}
+            <div style={{
+              display: 'flex', gap: 8, overflowX: 'auto', borderBottom: '1px solid var(--border)',
+              paddingBottom: 12, scrollbarWidth: 'none'
+            }}>
+              {seasonsList.map(season => {
+                const sNum = season.season_number?.toString() || '1';
+                const active = selectedSeason === sNum;
+                return (
+                  <button
+                    key={sNum}
+                    onClick={() => setSelectedSeason(sNum)}
+                    style={{
+                      padding: '8px 16px', borderRadius: 8, cursor: 'pointer', fontWeight: 700,
+                      fontSize: '0.82rem', border: 'none', whiteSpace: 'nowrap',
+                      background: active ? 'var(--primary)' : 'rgba(255,255,255,0.05)',
+                      color: active ? '#0a0a0f' : 'var(--text-secondary)',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    {season.name || `Sezon ${sNum}`}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Bölüm Listesi */}
+            <div>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'white', marginBottom: 16 }}>
+                Sezon {selectedSeason} Bölümleri ({activeSeasonEpisodes.length})
+              </h3>
+              
+              {activeSeasonEpisodes.length === 0 ? (
+                <div style={{
+                  padding: '40px 0', textCenter: 'center', color: 'var(--text-muted)',
+                  background: 'rgba(255,255,255,0.01)', border: '1px dotted var(--border)',
+                  borderRadius: 12, textAlign: 'center', fontSize: '0.85rem'
+                }}>
+                  Bu sezonda oynatılabilir bölüm bulunamadı.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {activeSeasonEpisodes.map(ep => {
+                    const durationStr = ep.info?.duration || '';
+                    return (
+                      <div
+                        key={ep.id}
+                        onClick={() => handlePlayEpisode(ep)}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          padding: '14px 20px', borderRadius: 12, cursor: 'pointer',
+                          background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
+                          transition: 'all 0.2s'
+                        }}
+                        onMouseEnter={e => {
+                          e.currentTarget.style.background = 'rgba(0, 254, 218, 0.04)';
+                          e.currentTarget.style.borderColor = 'rgba(0, 254, 218, 0.2)';
+                        }}
+                        onMouseLeave={e => {
+                          e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
+                          e.currentTarget.style.borderColor = 'var(--border)';
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                          <div style={{
+                            width: 32, height: 32, borderRadius: '50%',
+                            background: 'rgba(255,255,255,0.06)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-secondary)',
+                            flexShrink: 0
+                          }}>
+                            {ep.episode_num}
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'white' }}>
+                              {ep.title || `${ep.episode_num}. Bölüm`}
+                            </div>
+                            {ep.info?.plot && (
+                              <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: 4, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                                {ep.info.plot}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          {durationStr && (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              ⏳ {durationStr}
+                            </span>
+                          )}
+                          <div style={{
+                            width: 32, height: 32, borderRadius: '50%',
+                            background: 'linear-gradient(135deg, var(--primary) 0%, #00c9a7 100%)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: '#0a0a0f', flexShrink: 0, boxShadow: '0 4px 12px rgba(0,254,218,0.2)'
+                          }}>
+                            <Play size={14} fill="#0a0a0f" color="#0a0a0f" />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Video Player Bölümü
+  const renderVideoPlayer = () => {
+    if (!activeStreamUrl) return null;
+
+    return (
+      <div 
+        ref={containerRef}
+        id="custom-player-container"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setShowControls(false)}
+        style={{
+          flex: 1, background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          position: 'relative', overflow: 'hidden', cursor: showControls ? 'default' : 'none'
+        }}
+      >
+        <video
+          ref={videoRef}
+          src={activeStreamUrl}
+          onTimeUpdate={handleTimeUpdate}
+          onDurationChange={handleDurationChange}
+          onError={() => setVideoError(true)}
+          autoPlay
+          style={{
+            width: '100%', height: '100%', objectFit: 'contain',
+            maxHeight: '100vh',
+          }}
+          onClick={handlePlayPause}
+        />
+
+        {/* Video Hata Bildirimi */}
+        {videoError && (
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 10,
+            background: 'rgba(10,10,15,0.96)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            padding: 24, textAlign: 'center', color: 'white'
+          }}>
+            <AlertTriangle size={48} color="#f59e0b" style={{ marginBottom: 16 }} />
+            <h3 style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: 8 }}>Oynatma Hatası / Format Uyumsuzluğu</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: 500, lineHeight: 1.6, marginBottom: 24 }}>
+              Bu video formatı (genellikle <strong>.mkv</strong> veya <strong>.ts</strong>) tarayıcınızın dahili oynatıcısı tarafından doğrudan desteklenmiyor. 
+              İçeriği izlemek için lütfen sağ üstteki turuncu renkli <strong>"VLC'de Aç"</strong> butonunu tıklayarak VLC player'da oynatın veya doğrudan bilgisayarınıza/telefonunuza indirin.
+            </p>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <a 
+                href={externalPlayerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  padding: '10px 24px', borderRadius: 10, cursor: 'pointer', fontWeight: 700,
+                  background: '#f59e0b', border: '1px solid #f59e0b',
+                  color: '#0a0a0f', fontSize: '0.9rem', textDecoration: 'none'
+                }}
+              >
+                VLC Oynatıcıda Aç
+              </a>
+              <button 
+                onClick={closeVideo}
+                style={{
+                  padding: '10px 24px', borderRadius: 10, cursor: 'pointer', fontWeight: 700,
+                  background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)',
+                  color: 'white', fontFamily: 'inherit', fontSize: '0.9rem',
+                }}
+              >
+                Geri Dön
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Kumanda ve Kontroller Overlay */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: showControls ? 'linear-gradient(0deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.3) 30%, rgba(0,0,0,0.3) 70%, rgba(0,0,0,0.7) 100%)' : 'none',
+          display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+          opacity: showControls ? 1 : 0,
+          transition: 'opacity 0.3s ease',
+          pointerEvents: showControls ? 'auto' : 'none',
+          padding: 20
+        }}>
+          {/* Üst Bar (Kumanda Üstü) */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {!isMovie && (
+                <button 
+                  onClick={closeVideo}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '8px 14px', borderRadius: 8, cursor: 'pointer', fontWeight: 700,
+                    background: 'rgba(0,0,0,0.6)', border: '1px solid rgba(255,255,255,0.1)',
+                    color: 'white', fontSize: '0.8rem',
+                  }}
+                >
+                  <ArrowLeft size={14} />
+                  Bölüm Listesi
+                </button>
+              )}
+              <span style={{ color: 'white', fontWeight: 600, fontSize: '0.9rem', textShadow: '0 2px 4px rgba(0,0,0,0.8)' }}>
+                {activeTitle}
+              </span>
+            </div>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{
+                background: 'rgba(0,254,218,0.1)', border: '1px solid rgba(0,254,218,0.2)',
+                color: 'var(--primary)', padding: '3px 8px', borderRadius: 6, fontSize: '0.72rem', fontWeight: 700
+              }}>
+                CANLI AKIŞ
+              </span>
+            </div>
+          </div>
+
+          {/* Orta Play/Pause Düğme */}
+          <div style={{ display: 'flex', alignSelf: 'center', justifySelf: 'center' }}>
+            <button 
+              onClick={handlePlayPause}
+              style={{
+                width: 64, height: 64, borderRadius: '50%',
+                background: 'rgba(0,254,218,0.15)', border: '2px solid var(--primary)',
+                color: 'var(--primary)', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 0 30px rgba(0,254,218,0.25)',
+                transition: 'transform 0.2s',
+              }}
+              onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.1)'}
+              onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
+            >
+              {isPlaying ? <Pause size={28} fill="var(--primary)" /> : <Play size={28} fill="var(--primary)" style={{ marginLeft: 4 }} />}
+            </button>
+          </div>
+
+          {/* Alt Kontrol Barı */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(10,10,15,0.7)', backdropFilter: 'blur(10px)', padding: '12px 18px', borderRadius: 16, border: '1px solid rgba(255,255,255,0.06)' }}>
+            {/* Süre Çubuğu */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem', fontFamily: 'monospace', width: 45, textAlign: 'right' }}>
+                {formatTime(currentTime)}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={duration || 100}
+                value={currentTime}
+                onChange={handleSeek}
+                style={{
+                  flex: 1, accentColor: 'var(--primary)', cursor: 'pointer', height: 4, borderRadius: 2,
+                  outline: 'none', background: 'rgba(255,255,255,0.2)'
+                }}
+              />
+              <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem', fontFamily: 'monospace', width: 45 }}>
+                {formatTime(duration)}
+              </span>
+            </div>
+
+            {/* Butonlar */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+              {/* Sol kontroller */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <button onClick={handlePlayPause} style={CTRL_BTN}>
+                  {isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+                </button>
+
+                <button onClick={() => handleSkip(-10)} style={CTRL_BTN} title="10 Saniye Geri">
+                  <span style={{ fontSize: '0.62rem', fontWeight: 900, marginRight: 2 }}>10s</span>
+                  <ChevronLeft size={16} style={{ marginLeft: -4 }} />
+                </button>
+                
+                <button onClick={() => handleSkip(10)} style={CTRL_BTN} title="10 Saniye İleri">
+                  <ChevronRight size={16} style={{ marginRight: -4 }} />
+                  <span style={{ fontSize: '0.62rem', fontWeight: 900, marginLeft: 2 }}>10s</span>
+                </button>
+
+                {/* Ses */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button onClick={handleMuteToggle} style={CTRL_BTN}>
+                    {isMuted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={isMuted ? 0 : volume}
+                    onChange={handleVolume}
+                    style={{
+                      width: 60, accentColor: 'var(--primary)', cursor: 'pointer', height: 3,
+                      background: 'rgba(255,255,255,0.2)'
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Sağ kontroller */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {/* Hız */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {[1, 1.25, 1.5, 2].map(speed => (
+                    <button
+                      key={speed}
+                      onClick={() => handleSpeed(speed)}
+                      style={{
+                        padding: '2px 6px', borderRadius: 4, cursor: 'pointer', fontSize: '0.68rem', fontWeight: 700,
+                        background: playbackRate === speed ? 'var(--primary)' : 'rgba(255,255,255,0.05)',
+                        border: 'none', color: playbackRate === speed ? '#0a0a0f' : 'rgba(255,255,255,0.6)',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {speed}x
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)' }} />
+
+                {/* Fullscreen */}
+                <button onClick={handleFullscreenToggle} style={CTRL_BTN}>
+                  {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const CTRL_BTN = {
+    background: 'none', border: 'none', color: 'rgba(255,255,255,0.8)',
+    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: 4, borderRadius: 6, transition: 'all 0.2s',
+  };
 
   return (
     <div
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
-        background: 'rgba(0,0,0,0.97)',
+        background: '#0a0a0f',
         display: 'flex', flexDirection: 'column',
       }}
     >
-      {/* Üst bar */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '12px 20px',
-        background: 'rgba(0,0,0,0.9)',
-        borderBottom: '1px solid rgba(255,255,255,0.08)',
-        flexShrink: 0,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 8,
-            background: 'linear-gradient(135deg, #00feda20, #00feda10)',
-            border: '1px solid rgba(0,254,218,0.3)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Tv size={16} color="var(--primary)" />
-          </div>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'white' }}>
-              {stream.name}
-            </div>
-            <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)' }}>
-              izlelan · XUI.one Hot Player
-            </div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* Tam sayfada aç */}
-          <a
-            href={hotPlayerBase}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '7px 12px', borderRadius: 8, textDecoration: 'none',
-              background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
-              color: 'rgba(255,255,255,0.7)', fontSize: '0.78rem', fontWeight: 600,
-            }}
-          >
-            <ExternalLink size={13} />
-            Tam Ekran
-          </a>
-
-          {/* Kapat */}
-          <button onClick={onClose} style={{
-            width: 36, height: 36, borderRadius: '50%',
-            background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
-            color: 'white', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <X size={16} />
-          </button>
-        </div>
-      </div>
-
-      {/* İçerik alanı */}
-      <div style={{ flex: 1, position: 'relative', display: 'flex' }}>
-        {!loaded && (
-          <div style={{
-            position: 'absolute', inset: 0, zIndex: 10,
-            display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center',
-            background: '#0a0a0f',
-            color: 'rgba(255,255,255,0.5)',
-          }}>
-            <div style={{
-              width: 48, height: 48, borderRadius: '50%',
-              border: '3px solid rgba(0,254,218,0.2)',
-              borderTopColor: 'var(--primary)',
-              animation: 'spin 0.8s linear infinite',
-              marginBottom: 16,
-            }} />
-            <p style={{ fontWeight: 600, marginBottom: 6 }}>Hot Player yükleniyor...</p>
-            <p style={{ fontSize: '0.8rem', opacity: 0.6 }}>
-              Açılır açılmaz {username} ile giriş yapın
-            </p>
-            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-          </div>
-        )}
-
-        {/* Hot Player iframe */}
-        <iframe
-          ref={iframeRef}
-          src={hotPlayerBase}
-          onLoad={handleIframeLoad}
-          style={{
-            flex: 1, width: '100%', height: '100%',
-            border: 'none',
-            opacity: loaded ? 1 : 0,
-            transition: 'opacity 0.3s ease',
-          }}
-          title={`izlelan - ${stream.name}`}
-          allow="autoplay; fullscreen; picture-in-picture"
-          allowFullScreen
-        />
-      </div>
-
-      {/* Alt bilgi şeridi */}
-      <div style={{
-        padding: '8px 20px',
-        background: 'rgba(0,0,0,0.8)',
-        borderTop: '1px solid rgba(255,255,255,0.06)',
-        display: 'flex', alignItems: 'center', gap: 12,
-        flexShrink: 0,
-      }}>
-        <div style={{
-          padding: '4px 10px', borderRadius: 6,
-          background: 'rgba(0,254,218,0.08)', border: '1px solid rgba(0,254,218,0.15)',
-          fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 600,
-        }}>
-          👤 {username}
-        </div>
-        <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.35)' }}>
-          Hot Player açıldığında kullanıcı adı ve şifrenizle giriş yapın, ardından içeriği bulun.
-        </span>
-      </div>
+      {renderHeader()}
+      {activeStreamUrl ? renderVideoPlayer() : renderSeriesDetail()}
     </div>
   );
 }
