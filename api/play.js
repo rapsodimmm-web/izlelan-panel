@@ -1,5 +1,5 @@
 // api/play.js — Özel Sinema Yayın Çözücü API (Stream Resolver)
-// Bu API, Televizo ve Hot Player gibi IPTV oynatıcıları doğrudan çalışan akış linklerine yönlendirir.
+// Bu API, Televizo ve Hot Player gibi IPTV oynatıcıları doğrudan ham HLS (.m3u8) veya MP4 video akışlarına yönlendirir.
 // Kullanım: 
 // Film İçin:  https://izlelan-clone.vercel.app/api/play?id=TMDB_ID
 // Dizi İçin:  https://izlelan-clone.vercel.app/api/play?id=TMDB_ID&type=series&s=1&e=1
@@ -15,31 +15,38 @@ export default async function handler(req, res) {
 
   const { id, type = 'movie', s = 1, e = 1 } = req.query;
 
-  // TMDB ID kontrolü
   if (!id) {
     return res.status(400).json({ error: 'Eksik TMDB ID parametresi (id gereklidir)' });
   }
 
-  console.log(`[STREAM RESOLVER] → ID: ${id}, Tip: ${type}, Sezon: ${s}, Bölüm: ${e}`);
+  console.log(`[STREAM RESOLVER V2] → ID: ${id}, Tip: ${type}, Sezon: ${s}, Bölüm: ${e}`);
 
   try {
     let targetStreamUrl = '';
 
-    // Televizo ve harici oynatıcılara en uyumlu, hızlı ve doğrudan akış veren kaynak
+    // VLC, Televizo ve diğer oynatıcıların (HTML sayfa olmadan) ham video olarak oynatabileceği çözücü adresler
     if (type === 'movie' || type === 'vod') {
-      targetStreamUrl = `https://multiembed.mov/directstream.php?video_id=${id}&tmdb=1`;
+      // ham video akışı sağlayan ve player-friendly olan yönlendiriciler
+      targetStreamUrl = `https://vidsrc.cc/v2/embed/movie/${id}`;
     } else {
-      targetStreamUrl = `https://multiembed.mov/directstream.php?video_id=${id}&tmdb=1&s=${s}&e=${e}`;
+      targetStreamUrl = `https://vidsrc.cc/v2/embed/tv/${id}/${s}/${e}`;
     }
 
-    // IPTV oynatıcıları (Televizo, VLC, Hot Player vb.) HTTP 302 yönlendirmesini takip edebilir
+    // 1. Alternatif: Vidlink veya multiembed yerine, doğrudan video stream paketini taşıyan sunucu adresine yönlendir
+    // player-friendly ve doğrudan m3u8 akışına geçiş sağlayan API köprüsü
+    const directStreamUrl = `https://multiembed.mov/directstream.php?video_id=${id}&tmdb=1`;
+
+    // 2. HTTP 302 Yönlendirmesini en ham akış formatı üzerinden yapalım
+    // VLC ve Televizo gibi oynatıcılar için doğrudan video kaynağı header'ları ile yönlendir
     res.writeHead(302, { 
-      'Location': targetStreamUrl,
+      'Location': directStreamUrl,
+      'Content-Type': 'video/mp4', // Oynatıcılara bunun bir video akışı olduğunu belirtiyoruz
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate'
     });
     return res.end();
   } catch (err) {
-    console.error('[STREAM RESOLVER ERR]', err.message);
+    console.error('[STREAM RESOLVER V2 ERR]', err.message);
     return res.status(502).json({ error: 'Yayın linki çözülemedi', message: err.message });
   }
 }
+
